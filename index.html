@@ -133,6 +133,13 @@
   </div>
 
   <div class="card">
+    <div class="hint">📥 <b>استيراد GLB — للخطة المجانية:</b> ولّد النموذج داخل موقع Meshy نفسه، نزّل ملف GLB، ثم استورده هنا للمعاينة. ملاحظة: تصدير OBJ/STL من هنا يحمل الشكل الهندسي فقط — الخامات والألوان تبقى داخل ملف GLB الأصلي، فاستخدم GLB مباشرة في Godot أو Blender كلما أمكن.</div>
+    <label style="display:inline-block; padding:12px 18px; border-radius:10px; background:#0c6b57; color:#fff; font-size:15px; margin-top:10px; cursor:pointer">📥 اختر ملف GLB
+      <input type="file" id="glbFile" accept=".glb" hidden>
+    </label>
+  </div>
+
+  <div class="card">
     <canvas id="view"></canvas>
     <div id="stats">لم يُبنَ أي مجسّم بعد — ارفع صورة واضغط «ابنِ المجسّم».</div>
     <div class="btnrow" style="margin-top:10px">
@@ -578,10 +585,12 @@ document.getElementById('build').addEventListener('click', function () {
 });
 document.getElementById('expObj').addEventListener('click', function () {
   if (currentGeom) download(currentName + '.obj', toOBJ(currentGeom));
+  else if (typeof importedScene !== 'undefined' && importedScene) download(currentName + '-imported.obj', exportImportedOBJ(importedScene));
   else if (typeof aiShown !== 'undefined' && aiShown) msg('النموذج الحالي من Meshy — استخدم روابط التحميل (GLB/OBJ/STL) في بطاقة الذكاء الاصطناعي.');
 });
 document.getElementById('expStl').addEventListener('click', function () {
   if (currentGeom) download(currentName + '.stl', toSTL(currentGeom));
+  else if (typeof importedScene !== 'undefined' && importedScene) download(currentName + '-imported.stl', exportImportedSTL(importedScene));
   else if (typeof aiShown !== 'undefined' && aiShown) msg('النموذج الحالي من Meshy — استخدم روابط التحميل (GLB/OBJ/STL) في بطاقة الذكاء الاصطناعي.');
 });
 </script>
@@ -757,6 +766,99 @@ document.getElementById('aiResume').addEventListener('click', function () {
   if (!key || !tid) { msg('أدخل المفتاح ورقم المهمة للاستئناف.'); return; }
   aiRun++;
   pollMeshy(key, tid, aiRun);
+});
+</script>
+<script>
+/* ---------- GLB import (free-plan workflow) ---------- */
+var importedScene = null;
+function ensureGLTFLoader(cb) {
+  if (window.THREE.GLTFLoader) return cb();
+  var s = document.createElement('script');
+  s.src = 'https://unpkg.com/three@0.128.0/examples/js/loaders/GLTFLoader.js';
+  s.onload = cb;
+  s.onerror = function () { msg('تعذّر تحميل عارض GLB — تحقق من الإنترنت.'); };
+  document.head.appendChild(s);
+}
+function collectMeshGeoms(scene) {
+  scene.updateMatrixWorld(true);
+  var list = [];
+  scene.traverse(function (o) {
+    if (o.isMesh && o.geometry) {
+      var g = o.geometry.clone().applyMatrix4(o.matrixWorld);
+      if (!g.index) {
+        var n = g.attributes.position.count, ix = [];
+        for (var i = 0; i < n; i++) ix.push(i);
+        g.setIndex(ix);
+      }
+      if (!g.attributes.normal) g.computeVertexNormals();
+      list.push(g);
+    }
+  });
+  return list;
+}
+function exportImportedOBJ(scene) {
+  var out = ['# imported GLB, geometry only (textures stay in the GLB)'];
+  var vo = 0, no = 0;
+  collectMeshGeoms(scene).forEach(function (g) {
+    var p = g.attributes.position.array, n = g.attributes.normal.array, ix = g.index.array;
+    for (var i = 0; i < p.length; i += 3) out.push('v ' + p[i].toFixed(4) + ' ' + p[i + 1].toFixed(4) + ' ' + p[i + 2].toFixed(4));
+    for (var j = 0; j < n.length; j += 3) out.push('vn ' + n[j].toFixed(4) + ' ' + n[j + 1].toFixed(4) + ' ' + n[j + 2].toFixed(4));
+    for (var k = 0; k < ix.length; k += 3) {
+      var a = ix[k] + 1 + vo, b = ix[k + 1] + 1 + vo, c = ix[k + 2] + 1 + vo;
+      out.push('f ' + a + '//' + (a - vo + no) + ' ' + b + '//' + (b - vo + no) + ' ' + c + '//' + (c - vo + no));
+    }
+    vo += p.length / 3; no += n.length / 3;
+  });
+  return out.join('\n');
+}
+function exportImportedSTL(scene) {
+  var out = ['solid model'];
+  function sub(a, b) { return [a[0] - b[0], a[1] - b[1], a[2] - b[2]]; }
+  function cross(a, b) { return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]; }
+  collectMeshGeoms(scene).forEach(function (g) {
+    var p = g.attributes.position.array, ix = g.index.array;
+    for (var k = 0; k < ix.length; k += 3) {
+      var A = [p[ix[k] * 3], p[ix[k] * 3 + 1], p[ix[k] * 3 + 2]];
+      var B = [p[ix[k + 1] * 3], p[ix[k + 1] * 3 + 1], p[ix[k + 1] * 3 + 2]];
+      var C = [p[ix[k + 2] * 3], p[ix[k + 2] * 3 + 1], p[ix[k + 2] * 3 + 2]];
+      var nn = cross(sub(B, A), sub(C, A));
+      out.push(' facet normal ' + nn[0].toFixed(4) + ' ' + nn[1].toFixed(4) + ' ' + nn[2].toFixed(4));
+      out.push('  outer loop');
+      out.push('   vertex ' + A[0].toFixed(4) + ' ' + A[1].toFixed(4) + ' ' + A[2].toFixed(4));
+      out.push('   vertex ' + B[0].toFixed(4) + ' ' + B[1].toFixed(4) + ' ' + B[2].toFixed(4));
+      out.push('   vertex ' + C[0].toFixed(4) + ' ' + C[1].toFixed(4) + ' ' + C[2].toFixed(4));
+      out.push('  endloop');
+      out.push(' endfacet');
+    }
+  });
+  out.push('endsolid model');
+  return out.join('\n');
+}
+document.getElementById('glbFile').addEventListener('change', function (e) {
+  var f = e.target.files[0];
+  if (!f) return;
+  currentName = f.name.replace(/\.glb$/i, '').replace(/[^a-z0-9_-]/gi, '_') || 'model';
+  var url = URL.createObjectURL(f);
+  msg('جارٍ فتح ملف GLB…');
+  ensureGLTFLoader(function () {
+    new THREE.GLTFLoader().load(url, function (gltf) {
+      while (meshGroup.children.length) meshGroup.remove(meshGroup.children[0]);
+      var obj = gltf.scene;
+      var box = new THREE.Box3().setFromObject(obj);
+      var size = new THREE.Vector3(); box.getSize(size);
+      var center = new THREE.Vector3(); box.getCenter(center);
+      obj.position.sub(center);
+      obj.scale.setScalar(2.2 / Math.max(size.x, size.y, size.z));
+      meshGroup.add(obj);
+      importedScene = obj; currentGeom = null; aiShown = false;
+      document.getElementById('stats').textContent = 'تم استيراد GLB ✅ — ' + f.name + ' — اسحب للتدوير، وصدّر OBJ/STL من أزرار التصدير.';
+      document.getElementById('expObj').disabled = false;
+      document.getElementById('expStl').disabled = false;
+      msg('');
+    }, undefined, function () {
+      msg('تعذّر فتح ملف GLB — قد يكون مضغوطاً بصيغة غير مدعومة؛ جرّب فتحه في Blender أو Godot مباشرة.');
+    });
+  });
 });
 </script>
 </body>
