@@ -73,6 +73,14 @@
       <input type="color" id="color" value="#0c6b57">
     </div>
     <div class="ctl">
+      <label><span>تمييز الشكل (القناع)</span></label>
+      <select id="maskSel">
+        <option value="alpha">شفافية PNG</option>
+        <option value="dark">خلفية داكنة (لقطات شاشة)</option>
+        <option value="light">خلفية فاتحة (رسومات على أبيض)</option>
+      </select>
+    </div>
+    <div class="ctl">
       <label><span>الخلفية في المعاينة</span></label>
       <select id="bg">
         <option value="dark">داكنة</option>
@@ -83,6 +91,15 @@
     <div class="btnrow" style="margin-top:12px">
       <button id="build">🔨 ابنِ المجسّم</button>
       <button class="sec" id="spin">🔄 تدوير تلقائي</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="hint">✂️ قصّ المنطقة المطلوبة قبل البناء (مفيد جداً للقطات الشاشة): اسحب بإصبعك أو بالفأرة لتحديد مستطيل على الصورة ثم اضغط «تطبيق القص».</div>
+    <canvas id="cropCv" style="max-width:100%; border-radius:10px; margin-top:8px; touch-action:none; background:#0b0f13;"></canvas>
+    <div class="btnrow" style="margin-top:8px">
+      <button class="sec" id="applyCrop">✂️ تطبيق القص</button>
+      <button class="sec" id="resetCrop">↩️ إلغاء القص</button>
     </div>
   </div>
 
@@ -104,6 +121,7 @@
 var mode = 'extrude';
 var srcCanvas = null, srcCtx = null, srcW = 0, srcH = 0;
 var currentGeom = null, currentName = 'model';
+var origCanvas = null;
 var spinning = false;
 var msgEl = document.getElementById('msg');
 function msg(t) { msgEl.textContent = t || ''; }
@@ -180,7 +198,15 @@ function loadIntoCanvas(img, name) {
   srcCtx = srcCanvas.getContext('2d');
   srcCtx.drawImage(img, 0, 0, srcW, srcH);
   currentName = name.replace(/[^a-z0-9_-]/gi, '_') || 'model';
-  msg('تم تحميل الصورة (' + srcW + '×' + srcH + ') — اضغط «ابنِ المجسّم».');
+  // auto mask: opaque images have no transparency -> pick dark/light by mean brightness
+  var id = srcCtx.getImageData(0, 0, srcW, srcH).data, tr = 0, br = 0;
+  for (var i = 0; i < srcW * srcH; i++) { if (id[i * 4 + 3] < 128) tr++; br += (id[i * 4] + id[i * 4 + 1] + id[i * 4 + 2]) / 3; }
+  var sel = document.getElementById('maskSel');
+  if (tr / (srcW * srcH) < 0.02) sel.value = (br / (srcW * srcH) < 140) ? 'dark' : 'light';
+  else sel.value = 'alpha';
+  origCanvas = srcCanvas;
+  drawCrop();
+  msg('تم تحميل الصورة (' + srcW + '×' + srcH + ') — القناع التلقائي: ' + (sel.value === 'alpha' ? 'شفافية' : sel.value === 'dark' ? 'خلفية داكنة' : 'خلفية فاتحة') + '. قصّ المنطقة المطلوبة ثم اضغط «ابنِ المجسّم».');
 }
 document.getElementById('file').addEventListener('change', function (e) {
   var f = e.target.files[0];
@@ -234,13 +260,15 @@ function getPixels(detail) {
   x.drawImage(srcCanvas, 0, 0, w, h);
   return { w: w, h: h, data: x.getImageData(0, 0, w, h).data };
 }
+function maskMode() { return document.getElementById('maskSel').value; }
 function alphaMask(px, thresh) {
-  var w = px.w, h = px.h, d = px.data, mask = new Uint8Array(w * h);
+  var w = px.w, h = px.h, d = px.data, mask = new Uint8Array(w * h), mm = maskMode();
   for (var i = 0; i < w * h; i++) {
     var a = d[i * 4 + 3];
-    // transparent PNG: use alpha; opaque photo: use brightness vs white background
     var bright = (d[i * 4] + d[i * 4 + 1] + d[i * 4 + 2]) / 3;
-    mask[i] = (a > thresh || (a >= 250 && bright < 245)) ? 1 : 0;
+    if (mm === 'dark') mask[i] = (a > thresh && bright >= 40) ? 1 : 0;
+    else if (mm === 'light') mask[i] = (a > thresh && bright < 245) ? 1 : 0;
+    else mask[i] = (a > thresh) ? 1 : 0;
   }
   return mask;
 }
@@ -346,6 +374,9 @@ function buildExtrude(detail, depth, colorHex) {
   var mask = alphaMask(px, 128);
   var loops = traceBoundary(mask, px.w, px.h);
   if (!loops.length) return null;
+  // full-frame guard: a single outline covering ~the whole frame means the
+  // mask caught the background too -> the user gets a big box, warn them.
+  window.__fullFrame = loops.length === 1 && loops[0].length > (px.w + px.h) * 1.9;
   var geos = [];
   var col = new THREE.Color(colorHex);
   loops.slice(0, 12).forEach(function (loop) {
@@ -386,12 +417,13 @@ function buildHeight(detail, depth) {
 }
 function buildVoxel(detail) {
   var px = getPixels(detail);
+  var mask = alphaMask(px, 128);
   var w = px.w, h = px.h, d = px.data;
   var cell = 2 / Math.max(w, h);
   var geos = [];
   for (var y = 0; y < h; y++) for (var x = 0; x < w; x++) {
     var o = (y * w + x) * 4;
-    if (d[o + 3] < 128) continue;
+    if (!mask[y * w + x]) continue;
     var g = new THREE.BoxGeometry(cell * 0.96, cell * 0.96, cell * 0.96);
     g.translate((x - w / 2 + 0.5) * cell, (h / 2 - y - 0.5) * cell, 0);
     var n = g.attributes.position.count, carr = new Float32Array(n * 3);
@@ -503,7 +535,7 @@ document.getElementById('build').addEventListener('click', function () {
           : buildVoxel(detail);
       if (!g) { msg('تعذّر استخراج شكل من الصورة — جرّب صورة أوضح أو بخلفية شفافة.'); return; }
       showGeom(g);
-      msg('');
+      msg(window.__fullFrame ? 'تنبيه: القناع يغطي الصورة كلها تقريباً — النتيجة صندوق كبير. جرّب قناع «خلفية داكنة» أو قصّ المنطقة المطلوبة ثم أعد البناء.' : '');
     } catch (err) { msg('حدث خطأ أثناء البناء: ' + err.message); }
   }, 30);
 });
@@ -512,6 +544,57 @@ document.getElementById('expObj').addEventListener('click', function () {
 });
 document.getElementById('expStl').addEventListener('click', function () {
   if (currentGeom) download(currentName + '.stl', toSTL(currentGeom));
+});
+</script>
+<script>
+/* ---------- crop selection ---------- */
+var cropCv = document.getElementById('cropCv');
+var cropCtx = cropCv.getContext('2d');
+var selRect = null, dragStart = null;
+function drawCrop() {
+  if (!srcCanvas) return;
+  cropCv.width = Math.min(680, srcW);
+  cropCv.height = Math.round(cropCv.width * srcH / srcW);
+  cropCtx.drawImage(srcCanvas, 0, 0, cropCv.width, cropCv.height);
+  selRect = null;
+}
+function cropPos(e) {
+  var r = cropCv.getBoundingClientRect();
+  return [(e.clientX - r.left) * cropCv.width / r.width, (e.clientY - r.top) * cropCv.height / r.height];
+}
+function paintSel() {
+  cropCtx.drawImage(srcCanvas, 0, 0, cropCv.width, cropCv.height);
+  if (!selRect) return;
+  cropCtx.strokeStyle = '#ffd166';
+  cropCtx.lineWidth = 3;
+  cropCtx.strokeRect(selRect[0], selRect[1], selRect[2], selRect[3]);
+}
+cropCv.addEventListener('pointerdown', function (e) { dragStart = cropPos(e); selRect = null; cropCv.setPointerCapture(e.pointerId); });
+cropCv.addEventListener('pointermove', function (e) {
+  if (!dragStart) return;
+  var p = cropPos(e);
+  selRect = [Math.min(dragStart[0], p[0]), Math.min(dragStart[1], p[1]),
+             Math.abs(p[0] - dragStart[0]), Math.abs(p[1] - dragStart[1])];
+  paintSel();
+});
+cropCv.addEventListener('pointerup', function () { dragStart = null; });
+document.getElementById('applyCrop').addEventListener('click', function () {
+  if (!srcCanvas || !selRect || selRect[2] < 8 || selRect[3] < 8) { msg('حدّد مستطيلاً على الصورة أولاً.'); return; }
+  var sx = Math.round(selRect[0] * srcW / cropCv.width), sy = Math.round(selRect[1] * srcH / cropCv.height);
+  var sw = Math.round(selRect[2] * srcW / cropCv.width), sh = Math.round(selRect[3] * srcH / cropCv.height);
+  var c = document.createElement('canvas');
+  c.width = sw; c.height = sh;
+  c.getContext('2d').drawImage(srcCanvas, sx, sy, sw, sh, 0, 0, sw, sh);
+  srcCanvas = c; srcCtx = c.getContext('2d'); srcW = sw; srcH = sh;
+  drawCrop();
+  msg('تم القص (' + sw + '×' + sh + ') — اضغط «ابنِ المجسّم».');
+});
+document.getElementById('resetCrop').addEventListener('click', function () {
+  if (!origCanvas) return;
+  srcCanvas = origCanvas; srcCtx = origCanvas.getContext('2d');
+  srcW = origCanvas.width; srcH = origCanvas.height;
+  drawCrop();
+  msg('تم إلغاء القص — الصورة الأصلية كاملة.');
 });
 </script>
 </body>
