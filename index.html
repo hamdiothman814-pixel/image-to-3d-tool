@@ -59,6 +59,7 @@
       <button id="mExtrude" class="active">🧱 بروز الشكل</button>
       <button id="mHeight">⛰️ تضاريس</button>
       <button id="mVoxel">🧊 فوكسل</button>
+      <button id="mAI">🤖 ذكاء اصطناعي (Meshy)</button>
     </div>
     <div class="ctl">
       <label><span>العمق / الارتفاع</span><span id="depthVal">1.0</span></label>
@@ -101,6 +102,34 @@
       <button class="sec" id="applyCrop">✂️ تطبيق القص</button>
       <button class="sec" id="resetCrop">↩️ إلغاء القص</button>
     </div>
+  </div>
+
+  <div class="card" id="aiCard" style="display:none">
+    <div class="hint">🤖 إعادة بناء حقيقية بالذكاء الاصطناعي عبر Meshy — يولّد مجسّماً مفصّلاً ملوّناً من الصورة (GLB جاهز لـ Unity/Godot/Blender). قصّ الشخصية من الصورة أولاً ببطاقة القص فوق — كل ما كان الموضوع أوضح، كانت النتيجة أدق.<br>⚠️ توليد Meshy عبر الـ API يتطلب <b>خطة Pro (20$/شهر، 1000 رصيد)</b> لإنشاء مفتاح API — الخطة المجانية لا تعطي مفاتيح. التوليد الملوّن يستهلك 30 رصيداً (20 بلا ألوان). مفتاحك يُحفظ على جهازك فقط ولا يُرسل إلا إلى api.meshy.ai.</div>
+    <div class="ctl">
+      <label><span>مفتاح Meshy API</span></label>
+      <input type="password" id="meshyKey" placeholder="msy_..." style="width:100%; padding:10px; border-radius:10px; border:1px solid #2a3440; background:#0b0f13; color:#e8eef2; font-size:14px; direction:ltr; text-align:left;">
+    </div>
+    <div class="ctl">
+      <label><span>تفاصيل المجسّم</span></label>
+      <select id="aiPoly">
+        <option value="10000">خفيف للألعاب — 10 آلاف مضلع</option>
+        <option value="30000" selected>متوازن — 30 ألف مضلع</option>
+        <option value="100000">مفصّل — 100 ألف مضلع</option>
+      </select>
+    </div>
+    <label style="display:flex; gap:8px; align-items:center; margin-top:8px; font-size:14px"><input type="checkbox" id="aiTexture" checked> توليد الألوان والخامات (30 رصيداً بدل 20)</label>
+    <div class="btnrow" style="margin-top:12px">
+      <button id="aiGen">🤖 ولّد نموذج AI</button>
+    </div>
+    <div class="ctl" style="margin-top:12px">
+      <label><span>استئناف مهمة سابقة (رقم المهمة)</span></label>
+      <div style="display:flex; gap:8px">
+        <input type="text" id="aiTaskId" placeholder="task id" style="flex:1; padding:10px; border-radius:10px; border:1px solid #2a3440; background:#0b0f13; color:#e8eef2; font-size:14px; direction:ltr; text-align:left;">
+        <button class="sec" id="aiResume">استئناف</button>
+      </div>
+    </div>
+    <div id="aiLinks" class="btnrow" style="margin-top:12px"></div>
   </div>
 
   <div class="card">
@@ -488,16 +517,24 @@ function download(name, text) {
 /* ---------- UI wiring ---------- */
 function setMode(m) {
   mode = m;
-  ['mExtrude', 'mHeight', 'mVoxel'].forEach(function (id) { document.getElementById(id).classList.remove('active'); });
-  document.getElementById(m === 'extrude' ? 'mExtrude' : m === 'height' ? 'mHeight' : 'mVoxel').classList.add('active');
+  ['mExtrude', 'mHeight', 'mVoxel', 'mAI'].forEach(function (id) { document.getElementById(id).classList.remove('active'); });
+  document.getElementById(m === 'extrude' ? 'mExtrude' : m === 'height' ? 'mHeight' : m === 'voxel' ? 'mVoxel' : 'mAI').classList.add('active');
   document.getElementById('colorCtl').style.display = (m === 'extrude') ? '' : 'none';
-  msg(mode === 'extrude' ? 'نمط البروز: شكل الصورة يتحول لمجسّم بسماكة.' :
-      mode === 'height' ? 'نمط التضاريس: سطوع الصورة يتحول لارتفاعات — مناسب للصور الفوتوغرافية.' :
-      'نمط الفوكسل: كل بكسل يتحول لمكعب ملوّن — مثالي لشخصيات ألعاب الموبايل.');
+  document.getElementById('aiCard').style.display = (m === 'ai') ? '' : 'none';
+  if (m === 'ai') {
+    var saved = ''; try { saved = localStorage.getItem('meshy_key') || ''; } catch (e) {}
+    if (saved) document.getElementById('meshyKey').value = saved;
+    msg('نمط الذكاء الاصطناعي: الصورة تُرسل إلى Meshy وتعود مجسّماً مفصّلاً ملوّناً. أدخل مفتاح API ثم اضغط «ولّد نموذج AI».');
+  } else {
+    msg(mode === 'extrude' ? 'نمط البروز: شكل الصورة يتحول لمجسّم بسماكة.' :
+        mode === 'height' ? 'نمط التضاريس: سطوع الصورة يتحول لارتفاعات — مناسب للصور الفوتوغرافية.' :
+        'نمط الفوكسل: كل بكسل يتحول لمكعب ملوّن — مثالي لشخصيات ألعاب الموبايل.');
+  }
 }
 document.getElementById('mExtrude').addEventListener('click', function () { setMode('extrude'); });
 document.getElementById('mHeight').addEventListener('click', function () { setMode('height'); });
 document.getElementById('mVoxel').addEventListener('click', function () { setMode('voxel'); });
+document.getElementById('mAI').addEventListener('click', function () { setMode('ai'); });
 document.getElementById('depth').addEventListener('input', function (e) { document.getElementById('depthVal').textContent = e.target.value; });
 document.getElementById('detail').addEventListener('input', function (e) { document.getElementById('detailVal').textContent = e.target.value; });
 document.getElementById('bg').addEventListener('change', function (e) {
@@ -541,9 +578,11 @@ document.getElementById('build').addEventListener('click', function () {
 });
 document.getElementById('expObj').addEventListener('click', function () {
   if (currentGeom) download(currentName + '.obj', toOBJ(currentGeom));
+  else if (typeof aiShown !== 'undefined' && aiShown) msg('النموذج الحالي من Meshy — استخدم روابط التحميل (GLB/OBJ/STL) في بطاقة الذكاء الاصطناعي.');
 });
 document.getElementById('expStl').addEventListener('click', function () {
   if (currentGeom) download(currentName + '.stl', toSTL(currentGeom));
+  else if (typeof aiShown !== 'undefined' && aiShown) msg('النموذج الحالي من Meshy — استخدم روابط التحميل (GLB/OBJ/STL) في بطاقة الذكاء الاصطناعي.');
 });
 </script>
 <script>
@@ -595,6 +634,129 @@ document.getElementById('resetCrop').addEventListener('click', function () {
   srcW = origCanvas.width; srcH = origCanvas.height;
   drawCrop();
   msg('تم إلغاء القص — الصورة الأصلية كاملة.');
+});
+</script>
+<script>
+/* ---------- Meshy AI image-to-3D ---------- */
+var aiRun = 0, aiShown = false;
+function meshyHeaders(key) { return { 'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json' }; }
+function aiDataURL() {
+  var c = srcCanvas, w = srcW, h = srcH;
+  if (w > 1024) {
+    c = document.createElement('canvas');
+    c.width = 1024; c.height = Math.round(srcH * 1024 / srcW);
+    c.getContext('2d').drawImage(srcCanvas, 0, 0, c.width, c.height);
+  }
+  return c.toDataURL('image/jpeg', 0.9);
+}
+function showAIObject(url) {
+  function load() {
+    new THREE.GLTFLoader().load(url, function (gltf) {
+      while (meshGroup.children.length) meshGroup.remove(meshGroup.children[0]);
+      var obj = gltf.scene;
+      var box = new THREE.Box3().setFromObject(obj);
+      var size = new THREE.Vector3(); box.getSize(size);
+      var center = new THREE.Vector3(); box.getCenter(center);
+      obj.position.sub(center);
+      var s = 2.2 / Math.max(size.x, size.y, size.z);
+      obj.scale.setScalar(s);
+      meshGroup.add(obj);
+      currentGeom = null; aiShown = true;
+      document.getElementById('stats').textContent = 'نموذج Meshy AI ✅ — اسحب للتدوير، واستخدم روابط التحميل بالأسفل.';
+    }, undefined, function () {
+      msg('تم التوليد ✅ لكن المعاينة محجوبة من خادم الملفات — روابط التحميل بالأسفل تعمل مباشرة.');
+    });
+  }
+  if (window.THREE.GLTFLoader) load();
+  else {
+    var s = document.createElement('script');
+    s.src = 'https://unpkg.com/three@0.128.0/examples/js/loaders/GLTFLoader.js';
+    s.onload = load;
+    s.onerror = function () { msg('تم التوليد ✅ لكن تعذّر تحميل عارض GLB — استخدم روابط التحميل بالأسفل.'); };
+    document.head.appendChild(s);
+  }
+}
+async function pollMeshy(key, taskId, runToken) {
+  var t0 = Date.now();
+  while (runToken === aiRun) {
+    var r, wait = 15;
+    try {
+      r = await fetch('https://api.meshy.ai/openapi/v1/image-to-3d/' + taskId, { headers: { 'Authorization': 'Bearer ' + key } });
+      wait = parseInt(r.headers.get('Retry-After') || '15', 10) || 15;
+      if (r.status === 429 || r.status >= 500) { msg('ازدحام مؤقت في Meshy — إعادة المحاولة…'); }
+      else if (!r.ok) { msg('خطأ من Meshy (' + r.status + ').'); return; }
+      else {
+        var t = await r.json();
+        var mins = Math.floor((Date.now() - t0) / 60000);
+        msg('⏳ حالة المهمة: ' + t.status + ' — مرّ ' + mins + ' دقيقة. رقم المهمة: ' + taskId);
+        if (t.status === 'SUCCEEDED') {
+          var urls = t.model_urls || {};
+          var links = document.getElementById('aiLinks');
+          links.innerHTML = '';
+          [['glb', '⬇️ تحميل GLB'], ['obj', '⬇️ تحميل OBJ'], ['stl', '⬇️ تحميل STL']].forEach(function (p) {
+            if (urls[p[0]]) {
+              var a = document.createElement('a');
+              a.href = urls[p[0]]; a.textContent = p[1]; a.target = '_blank'; a.rel = 'noopener';
+              a.style.cssText = 'display:inline-block; padding:10px 14px; border-radius:10px; background:#0c6b57; color:#fff; text-decoration:none; font-size:14px;';
+              links.appendChild(a);
+            }
+          });
+          msg('تم التوليد ✅ — النموذج جاهز بالأسفل.');
+          if (urls.glb) showAIObject(urls.glb);
+          return;
+        }
+        if (t.status === 'FAILED' || t.status === 'CANCELED') {
+          msg('فشل التوليد: ' + ((t.task_error && t.task_error.message) || t.status) + ' — لم يُخصم رصيد عن المهمة الفاشلة.');
+          return;
+        }
+      }
+    } catch (e) { msg('انقطع الاتصال — إعادة المحاولة…'); }
+    if (Date.now() - t0 > 20 * 60 * 1000) {
+      msg('مرّت 20 دقيقة ولم تنتهِ المهمة بعد — احتفظ برقم المهمة (' + taskId + ') واستأنفها لاحقاً بزر الاستئناف.');
+      return;
+    }
+    await new Promise(function (res) { setTimeout(res, wait * 1000); });
+  }
+}
+async function aiGenerate() {
+  if (!srcCanvas) { msg('ارفع صورة أولاً (وقصّ الشخصية منها إن كانت لقطة شاشة).'); return; }
+  var key = document.getElementById('meshyKey').value.trim();
+  if (!key) { msg('أدخل مفتاح Meshy API أولاً (يُنشأ من خطة Pro على meshy.ai).'); return; }
+  try { localStorage.setItem('meshy_key', key); } catch (e) {}
+  var btn = document.getElementById('aiGen');
+  btn.disabled = true;
+  msg('جارٍ إرسال الصورة إلى Meshy…');
+  try {
+    var r = await fetch('https://api.meshy.ai/openapi/v1/image-to-3d', {
+      method: 'POST', headers: meshyHeaders(key),
+      body: JSON.stringify({
+        image_url: aiDataURL(),
+        model_type: 'standard',
+        ai_model: 'latest',
+        should_texture: document.getElementById('aiTexture').checked,
+        should_remesh: true,
+        target_polycount: +document.getElementById('aiPoly').value,
+        symmetry_mode: 'auto'
+      })
+    });
+    if (r.status === 401) { msg('المفتاح غير صالح (401) — تأكد من نسخه كاملاً من صفحة API Keys.'); return; }
+    if (r.status === 402) { msg('رصيدك غير كافٍ أو خطتك لا تسمح بإنشاء مفاتيح (402) — مفاتيح API تتطلب خطة Pro.'); return; }
+    if (!r.ok) { msg('خطأ من Meshy (' + r.status + ') — حاول مجدداً.'); return; }
+    var taskId = (await r.json()).result;
+    msg('تم إنشاء المهمة ✅ رقمها: ' + taskId + ' — جارٍ الانتظار، عادةً بضع دقائق.');
+    aiRun++;
+    pollMeshy(key, taskId, aiRun);
+  } catch (e) {
+    msg('تعذّر الاتصال بـ Meshy — تحقق من الإنترنت وحاول مجدداً.');
+  } finally { btn.disabled = false; }
+}
+document.getElementById('aiGen').addEventListener('click', aiGenerate);
+document.getElementById('aiResume').addEventListener('click', function () {
+  var key = document.getElementById('meshyKey').value.trim();
+  var tid = document.getElementById('aiTaskId').value.trim();
+  if (!key || !tid) { msg('أدخل المفتاح ورقم المهمة للاستئناف.'); return; }
+  aiRun++;
+  pollMeshy(key, tid, aiRun);
 });
 </script>
 </body>
